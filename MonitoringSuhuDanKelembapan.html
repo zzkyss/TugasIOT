@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart IoT Monitoring</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- MQTT -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+  <!-- ChartJS -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    :root {
+      --bg: #dadada;
+      --text: #1a1a1a;
+      --accent: #3b82f6;
+      --card-bg: white;
+      --radius: 18px;
+    }
+
+    /* Hide scrollbar (chrome, edge, opera, brave) */
+    ::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Hide scrollbar (Firefox) */
+    html {
+      scrollbar-width: none;
+    }
+
+    /* Hide scrollbar (IE & old Edge) */
+    body {
+      -ms-overflow-style: none;
+    }
+
+    body { background: var(--bg); font-family: "Inter", sans-serif; }
+
+    #splash.hide {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    nav {
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(0,0,0,0.07);
+    }
+
+    .card {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      box-shadow: 0px 6px 20px rgba(0,0,0,0.06);
+      transition: .2s;
+    }
+
+    .card:hover { transform: translateY(-3px); }
+
+    .status-badge {
+      padding: .4rem 1rem;
+      border-radius: 25px;
+      font-size: .75rem;
+      font-weight: 700;
+    }
+
+    .online { background: #22c55e; color: white; }
+    .offline { background: #ef4444; color: white; }
+
+    #logBox {
+      height: 150px;
+      overflow-y: auto;
+      background: #f8f8f8;
+      color: #202020;
+      border-radius: 10px;
+      padding: 10px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="splash" class="fixed inset-0 flex items-center justify-center bg-white z-50 opacity-100 transition-opacity duration-800">
+  <img src="IOT-01.png" width="200" class="animate-pulse"/>
+</div>
+
+<!-- NAV -->
+<nav class="px-6 py-4 flex justify-between items-center">
+  <div class="flex items-center gap-3">
+    <img src="IOT-01.png" width="64" />
+    <h1 class="text-xl font-bold">Smart IoT Temperature and Humidity Dashboard</h1>
+  </div>
+  <span id="espStatus" class="status-badge offline">Connecting...</span>
+</nav>
+
+<!-- CARDS -->
+<div class="grid gap-5 md:grid-cols-3 p-6">
+  <div class="card">
+    <h2 class="text-lg font-semibold">Temperature</h2>
+    <p id="tempVal" class="text-4xl font-bold mt-3">-- °C</p>
+  </div>
+
+  <div class="card">
+    <h2 class="text-lg font-semibold">Humidity</h2>
+    <p id="humVal" class="text-4xl font-bold mt-3">-- %</p>
+  </div>
+
+  <div class="card">
+    <h2 class="text-lg font-semibold">Device Control</h2>
+    <button id="piezo-btn" class="bg-blue-600 hover:bg-blue-700 text-white w-full py-3 rounded-xl mt-4 font-bold">
+      Turn Piezo ON
+    </button>
+  </div>
+</div>
+
+<!-- CHARTS -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-5 px-6">
+  <div class="p-5 rounded-xl shadow-md bg-white">
+    <canvas id="tempChart"></canvas>
+  </div>
+
+  <div class="p-5 rounded-xl shadow-md bg-white">
+    <canvas id="humChart"></canvas>
+  </div>
+</div>
+
+<!-- PIEZO LOG -->
+<div class="px-6 py-4">
+  <h2 class="font-semibold text-lg mb-2">Piezo Activity Log</h2>
+  <div id="logBox"></div>
+</div>
+
+<script>
+/* --- Variables --- */
+let piezoState = false;
+let lastSeen = 0;
+
+window.addEventListener("load", () => {
+  setTimeout(() => {
+    document.getElementById("splash").classList.add("hide");
+  }, 1800); // 1.8 detik delay
+});
+
+/* --- MQTT Connection --- */
+const client = mqtt.connect("wss://1394ecbd27fa4f39bae67d72a4f799fb.s1.eu.hivemq.cloud:8884/mqtt", {
+  username: "Muhammad_Dzaky",
+  password: "Karet-gelang07"
+});
+
+client.on("connect", () => {
+  updateStatus("ONLINE");
+  client.subscribe("iot/temperature");
+  client.subscribe("iot/humidity");
+  client.subscribe("iot/status");
+  client.subscribe("iot/piezo/status");
+});
+
+/* --- MQTT Data Listener --- */
+client.on("message", (topic, msg) => {
+  msg = msg.toString();
+
+  if (topic === "iot/status") {
+    lastSeen = Date.now();
+    updateStatus("ONLINE");
+  }
+
+  if (topic === "iot/temperature") {
+    document.getElementById("tempVal").innerText = msg + " °C";
+    addPoint(tempChart, msg);
+  }
+
+  if (topic === "iot/humidity") {
+    document.getElementById("humVal").innerText = msg + " %";
+    addPoint(humChart, msg);
+  }
+
+  if (topic === "iot/piezo/status") {
+    piezoState = msg === "ON";
+    updatePiezoUI();
+    addLog(`Piezo → ${msg}`);
+  }
+});
+
+/* --- Auto Offline Detector --- */
+setInterval(() => {
+  if(Date.now() - lastSeen > 7000) updateStatus("OFFLINE");
+}, 2000);
+
+function updateStatus(state){
+  const badge = document.getElementById("espStatus");
+  badge.innerText = state;
+  badge.className = "status-badge " + (state === "ONLINE" ? "online" : "offline");
+}
+
+/* --- PIEZO TOGGLE --- */
+document.getElementById("piezo-btn").addEventListener("click", () => {
+  if(Date.now() - lastSeen > 7000) return alert("⚠ Device Offline — Cannot control");
+  client.publish("iot/piezo", piezoState ? "OFF" : "ON");
+});
+
+function updatePiezoUI(){
+  const btn = document.getElementById("piezo-btn");
+  btn.innerText = piezoState ? "Turn Piezo OFF" : "Turn Piezo ON";
+  btn.className =
+    piezoState ? "bg-red-600 hover:bg-red-700 text-white w-full py-3 rounded-xl mt-4 font-bold"
+              : "bg-blue-600 hover:bg-blue-700 text-white w-full py-3 rounded-xl mt-4 font-bold";
+}
+
+/* --- UI Log --- */
+function addLog(t){
+  let box = document.getElementById("logBox");
+  box.innerHTML += `[${new Date().toLocaleTimeString()}] ${t}<br>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+/* --- CHARTS --- */
+const tempChart = new Chart(document.getElementById("tempChart"), {
+  type: "line",
+  data:{ labels:[], datasets:[{ label:"Temp (°C)", borderWidth:3, data:[] }]},
+});
+
+const humChart = new Chart(document.getElementById("humChart"), {
+  type: "line",
+  data:{ labels:[], datasets:[{ label:"Humidity (%)", borderWidth:3, data:[] }]},
+});
+
+function addPoint(chart, val){
+  chart.data.labels.push(new Date().toLocaleTimeString());
+  chart.data.datasets[0].data.push(val);
+
+  if(chart.data.labels.length > 30){
+    chart.data.labels.shift();
+    chart.data.datasets[0].data.shift();
+  }
+
+  chart.update();
+}
+</script>
+</body>
+</html>

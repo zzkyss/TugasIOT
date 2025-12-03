@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart IoT Dashboard</title>
+
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+</head>
+
+<body>
+  <nav class="navbar">
+    <div class="logo">
+      <img src="https://img.icons8.com/?size=512&id=61466&format=png" width="30">
+      <span>Smart IoT Dashboard</span>
+    </div>
+    <span id="espStatus" class="status offline">Connecting...</span>
+  </nav>
+
+  <div class="container">
+
+    <div class="card">
+      <h3>Temperature</h3>
+      <p id="tempVal" class="value">-- °C</p>
+    </div>
+
+    <div class="card">
+      <h3>Humidity</h3>
+      <p id="humVal" class="value">-- %</p>
+    </div>
+
+    <div class="card">
+      <h3>Device Control</h3>
+      <button id="piezoBtn">Toggle Piezo</button>
+    </div>
+  </div>
+
+  <div class="chart-box">
+    <canvas id="chart"></canvas>
+  </div>
+
+<script>
+let lastSeen = 0;
+let piezoState = false;
+
+/* ========== MQTT Setup ========== */
+const broker = "wss://1394ecbd27fa4f39bae67d72a4f799fb.s1.eu.hivemq.cloud:8884/mqtt";
+
+const client = mqtt.connect(broker, {
+    username:"Muhammad_Dzaky",
+    password:"Karet-gelang07",
+    clean:true,
+    connectTimeout:5000
+});
+
+client.on("connect", () => {
+  updateStatus("ONLINE");
+  client.subscribe("iot/temperature");
+  client.subscribe("iot/humidity");
+  client.subscribe("iot/status");
+  client.subscribe("iot/piezo/status");
+});
+
+client.on("message", (topic, msg) => {
+  msg = msg.toString();
+
+  if(topic === "iot/status" && msg === "ONLINE") {
+    lastSeen = Date.now();
+    updateStatus("ONLINE");
+  }
+
+  if(topic === "iot/temperature") {
+    document.getElementById("tempVal").innerText = msg + "°C";
+    addData(chart, msg);
+  }
+
+  if(topic === "iot/humidity") {
+    document.getElementById("humVal").innerText = msg + "%";
+  }
+
+  if(topic === "iot/piezo/status") {
+    piezoState = msg === "ON";
+    updateBuzzerButton();
+  }
+});
+
+/* Auto offline detect */
+setInterval(() => {
+  if(Date.now() - lastSeen > 7000){
+    updateStatus("OFFLINE");
+    document.getElementById("tempVal").innerText = "-- °C";
+    document.getElementById("humVal").innerText = "-- %";
+  }
+}, 2000);
+
+function updateStatus(state){
+  const el = document.getElementById("espStatus");
+  el.innerText = state;
+  el.className = `px-3 py-1 rounded-full text-sm ${state === "ONLINE" ? "bg-green-600" : "bg-red-600"}`;
+}
+
+/* ========== CHART ========== */
+const ctx = document.getElementById("chart");
+const chart = new Chart(ctx, {
+  type: "line",
+  data: { labels: [], datasets: [{ label:"Temperature", data:[], borderWidth:2 }] },
+  options: { scales: { y: { beginAtZero:false } } }
+});
+
+function addData(chart, value){
+  chart.data.labels.push(new Date().toLocaleTimeString());
+  chart.data.datasets[0].data.push(value);
+  
+  if(chart.data.labels.length > 25){
+    chart.data.labels.shift();
+    chart.data.datasets[0].data.shift();
+  }
+  chart.update();
+}
+
+/* ========== Control ========== */
+function updateBuzzerButton(){
+  const btn = document.getElementById("buzzerBtn");
+  btn.innerText = piezoState ? "Turn OFF Piezo" : "Turn ON Piezo";
+  btn.className = `mt-3 w-full py-2 px-3 rounded-lg transition ${piezoState ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"}`;
+}
+
+document.getElementById("buzzerBtn").addEventListener("click", () => {
+  if(Date.now() - lastSeen > 7000){
+    alert("⚠ ESP Offline — Control Disabled!");
+    return;
+  }
+  client.publish("iot/piezo", piezoState ? "OFF" : "ON");
+});
+</script>
+
+</body>
+</html>
